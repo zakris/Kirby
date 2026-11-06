@@ -13,4 +13,9 @@ final class KirbyKitTests: XCTestCase {
         let t = try JSONDecoder().decode(KirbyTask.self, from: Data(json.utf8))
         XCTAssertEqual(t.title, "x")
     }
+
+    func testBaseURLDefaultsToProductionAndCanBeOverridden() {
+        XCTAssertEqual(APIClient.configuredBaseURL([:]), APIClient.productionURL)
+        XCTAssertEqual(APIClient.configuredBaseURL(["KIRBY_API_URL": "http://127.0.0.1:8080"]).absoluteString, "http://127.0.0.1:8080")
+    }
 }

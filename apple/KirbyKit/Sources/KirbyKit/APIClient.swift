@@ -1,11 +1,28 @@
 import Foundation
 
 public struct APIClient: Sendable {
-    public var baseURL: URL
-    public var session: URLSession = .shared
+    /// Hosted backend (Render + Neon).
+    public static let productionURL = URL(string: "https://kirby-backend-miv5.onrender.com")!
 
-    public init(baseURL: URL = URL(string: "http://127.0.0.1:8080")!) {
+    /// `KIRBY_API_URL` (e.g. `http://127.0.0.1:8080`, set in the Xcode scheme's environment)
+    /// overrides the hosted backend for local development.
+    public static func configuredBaseURL(_ env: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        env["KIRBY_API_URL"].flatMap(URL.init(string:)) ?? productionURL
+    }
+
+    /// Generous timeouts: Render's free tier can take about a minute to wake from idle.
+    public static let defaultSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        return URLSession(configuration: config)
+    }()
+
+    public var baseURL: URL
+    public var session: URLSession
+
+    public init(baseURL: URL = APIClient.configuredBaseURL(), session: URLSession = APIClient.defaultSession) {
         self.baseURL = baseURL
+        self.session = session
     }
 
     public func tasks(on date: String) async throws -> [KirbyTask] {
