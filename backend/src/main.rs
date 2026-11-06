@@ -103,14 +103,26 @@ fn cors() -> CorsLayer {
 
 #[tokio::main]
 async fn main() {
+    // Pooled URL (PgBouncer) for request traffic.
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    // Migrations take session-level advisory locks, so they need a direct (non-pooled) connection.
+    let direct_url = std::env::var("DATABASE_URL_UNPOOLED").unwrap_or_else(|_| url.clone());
+
+    let migrator = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(30)) // Neon may need a moment to wake from idle
+        .connect(&direct_url)
+        .await
+        .expect("failed to connect to database (direct)");
+    sqlx::migrate!().run(&migrator).await.expect("migrations failed");
+    migrator.close().await;
+
     let db = PgPoolOptions::new()
         .max_connections(5)
-        .acquire_timeout(Duration::from_secs(30)) // Neon may need a moment to wake from idle
+        .acquire_timeout(Duration::from_secs(30))
         .connect(&url)
         .await
         .expect("failed to connect to database");
-    sqlx::migrate!().run(&db).await.expect("migrations failed");
 
     let app = Router::new()
         .route("/tasks", get(list).post(create))

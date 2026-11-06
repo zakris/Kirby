@@ -7,6 +7,8 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        sync: false   # paste your Neon connection string in the Render dashboard
+        sync: false   # Neon pooled connection string (DATABASE_URL in .env.local)
+      - key: DATABASE_URL_UNPOOLED
+        sync: false   # Neon direct connection string, used for migrations
       - key: KIRBY_ALLOWED_ORIGIN
         value: https://zakris.github.io
