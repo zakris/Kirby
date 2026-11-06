@@ -1,17 +1,17 @@
-use std::{collections::HashMap, sync::Arc};
+use std::time::Duration;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderValue, Method, StatusCode},
     routing::{get, patch},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, sqlx::FromRow)]
 struct Task {
     id: Uuid,
     title: String,
@@ -37,52 +37,92 @@ struct ListQuery {
     date: Option<String>,
 }
 
-type Store = Arc<Mutex<HashMap<Uuid, Task>>>;
+const COLS: &str = "id, title, to_char(date, 'YYYY-MM-DD') AS date, done";
 
-async fn list(State(s): State<Store>, Query(q): Query<ListQuery>) -> Json<Vec<Task>> {
-    let store = s.lock().await;
-    let mut tasks: Vec<Task> = store
-        .values()
-        .filter(|t| q.date.as_ref().is_none_or(|d| &t.date == d))
-        .cloned()
-        .collect();
-    tasks.sort_by(|a, b| a.date.cmp(&b.date).then(a.title.cmp(&b.title)));
-    Json(tasks)
+fn db_err(e: sqlx::Error) -> StatusCode {
+    // Invalid date strings surface as a database error; treat them as bad input.
+    if let sqlx::Error::Database(d) = &e {
+        if d.code().as_deref() == Some("22007") || d.code().as_deref() == Some("22008") {
+            return StatusCode::BAD_REQUEST;
+        }
+    }
+    eprintln!("db error: {e}");
+    StatusCode::INTERNAL_SERVER_ERROR
 }
 
-async fn create(State(s): State<Store>, Json(n): Json<NewTask>) -> (StatusCode, Json<Task>) {
-    let task = Task { id: Uuid::new_v4(), title: n.title, date: n.date, done: false };
-    s.lock().await.insert(task.id, task.clone());
-    (StatusCode::CREATED, Json(task))
+async fn list(State(db): State<PgPool>, Query(q): Query<ListQuery>) -> Result<Json<Vec<Task>>, StatusCode> {
+    let sql = format!(
+        "SELECT {COLS} FROM tasks WHERE ($1::text IS NULL OR date = $1::date) ORDER BY date, created_at"
+    );
+    let tasks = sqlx::query_as::<_, Task>(&sql).bind(q.date).fetch_all(&db).await.map_err(db_err)?;
+    Ok(Json(tasks))
 }
 
-async fn update(
-    State(s): State<Store>,
-    Path(id): Path<Uuid>,
-    Json(u): Json<UpdateTask>,
-) -> Result<Json<Task>, StatusCode> {
-    let mut store = s.lock().await;
-    let task = store.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
-    if let Some(t) = u.title { task.title = t; }
-    if let Some(d) = u.done { task.done = d; }
-    Ok(Json(task.clone()))
+async fn create(State(db): State<PgPool>, Json(n): Json<NewTask>) -> Result<(StatusCode, Json<Task>), StatusCode> {
+    let sql = format!("INSERT INTO tasks (id, title, date) VALUES ($1, $2, $3::date) RETURNING {COLS}");
+    let task = sqlx::query_as::<_, Task>(&sql)
+        .bind(Uuid::new_v4())
+        .bind(n.title)
+        .bind(n.date)
+        .fetch_one(&db)
+        .await
+        .map_err(db_err)?;
+    Ok((StatusCode::CREATED, Json(task)))
 }
 
-async fn delete(State(s): State<Store>, Path(id): Path<Uuid>) -> StatusCode {
-    if s.lock().await.remove(&id).is_some() { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+async fn update(State(db): State<PgPool>, Path(id): Path<Uuid>, Json(u): Json<UpdateTask>) -> Result<Json<Task>, StatusCode> {
+    let sql = format!(
+        "UPDATE tasks SET title = COALESCE($2, title), done = COALESCE($3, done) WHERE id = $1 RETURNING {COLS}"
+    );
+    sqlx::query_as::<_, Task>(&sql)
+        .bind(id)
+        .bind(u.title)
+        .bind(u.done)
+        .fetch_optional(&db)
+        .await
+        .map_err(db_err)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn delete(State(db): State<PgPool>, Path(id): Path<Uuid>) -> Result<StatusCode, StatusCode> {
+    let r = sqlx::query("DELETE FROM tasks WHERE id = $1").bind(id).execute(&db).await.map_err(db_err)?;
+    Ok(if r.rows_affected() > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+}
+
+fn cors() -> CorsLayer {
+    match std::env::var("KIRBY_ALLOWED_ORIGIN") {
+        Ok(origin) => CorsLayer::new()
+            .allow_origin(origin.parse::<HeaderValue>().expect("invalid KIRBY_ALLOWED_ORIGIN"))
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_headers(Any),
+        // Local development: no origin configured, allow everything.
+        Err(_) => CorsLayer::permissive(),
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let store: Store = Arc::default();
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let db = PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(30)) // Neon may need a moment to wake from idle
+        .connect(&url)
+        .await
+        .expect("failed to connect to database");
+    sqlx::migrate!().run(&db).await.expect("migrations failed");
+
     let app = Router::new()
         .route("/tasks", get(list).post(create))
         .route("/tasks/{id}", patch(update).delete(delete))
         .route("/health", get(|| async { "ok" }))
-        .layer(CorsLayer::permissive()) // tighten to the Pages origin before deploying
-        .with_state(store);
+        .layer(cors())
+        .with_state(db);
 
-    let addr = std::env::var("KIRBY_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    // Render provides PORT; KIRBY_ADDR overrides for local use.
+    let addr = std::env::var("KIRBY_ADDR").unwrap_or_else(|_| {
+        format!("0.0.0.0:{}", std::env::var("PORT").unwrap_or_else(|_| "8080".into()))
+    });
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("kirby-backend listening on http://{addr}");
     axum::serve(listener, app).await.unwrap();

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: kirby-backend
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false   # paste your Neon connection string in the Render dashboard
+      - key: KIRBY_ALLOWED_ORIGIN
+        value: https://zakris.github.io
