@@ -1,2 +1,2 @@
-// Backend URL. Override at deploy time by editing this file (or generating it in CI).
-export const API_BASE = "http://127.0.0.1:8080";
+// Backend URL (Render). For local dev, temporarily use http://127.0.0.1:8080.
+export const API_BASE = "https://kirby-backend-miv5.onrender.com";
