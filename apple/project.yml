@@ -1,0 +1,34 @@
+# Generate the Xcode project with: brew install xcodegen && cd apple && xcodegen
+name: Kirby
+options:
+  bundleIdPrefix: com.example   # TODO: set your own
+packages:
+  KirbyKit:
+    path: KirbyKit
+targets:
+  Kirby-macOS:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources: [macOS]
+    dependencies:
+      - package: KirbyKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.kirby.mac
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
+  Kirby-iOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [iOS]
+    dependencies:
+      - package: KirbyKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.kirby.ios
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES

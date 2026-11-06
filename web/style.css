@@ -1,0 +1,10 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; }
+main { max-width: 32rem; margin: 0 auto; padding: 1rem; }
+form { display: flex; gap: .5rem; }
+input#title { flex: 1; padding: .5rem; }
+ul { list-style: none; padding: 0; }
+li { display: flex; gap: .5rem; align-items: center; padding: .4rem 0; }
+li.done span { text-decoration: line-through; opacity: .6; }
+li span { flex: 1; }
+#error { color: crimson; }
