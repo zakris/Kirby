@@ -101,12 +101,28 @@ fn cors() -> CorsLayer {
     }
 }
 
+/// Read a connection string from the environment, ignoring empty values and
+/// stripping stray whitespace/quotes (easy to introduce when pasting secrets into a dashboard).
+fn env_url(name: &str) -> Option<String> {
+    let v = std::env::var(name).ok()?;
+    let v = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+fn check_url(name: &str, url: &str) {
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        panic!("{name} must start with postgres:// or postgresql:// (check the value set in your host's env settings)");
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Pooled URL (PgBouncer) for request traffic.
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let url = env_url("DATABASE_URL").expect("DATABASE_URL must be set");
+    check_url("DATABASE_URL", &url);
     // Migrations take session-level advisory locks, so they need a direct (non-pooled) connection.
-    let direct_url = std::env::var("DATABASE_URL_UNPOOLED").unwrap_or_else(|_| url.clone());
+    let direct_url = env_url("DATABASE_URL_UNPOOLED").unwrap_or_else(|| url.clone());
+    check_url("DATABASE_URL_UNPOOLED", &direct_url);
 
     let migrator = PgPoolOptions::new()
         .max_connections(1)
